@@ -13,6 +13,8 @@ this in <http://guide.elm-lang.org/architecture/index.html>
 
 -}
 
+import Animator
+import Animator.Css
 import Browser
 import Browser.Dom as Dom
 import Html exposing (..)
