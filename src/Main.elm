@@ -1,4 +1,4 @@
-port module Main exposing (..)
+module Main exposing (..)
 
 {-| TodoMVC implemented in Elm, using plain HTML and CSS for rendering.
 
@@ -24,19 +24,30 @@ import Html.Keyed as Keyed
 import Html.Lazy exposing (lazy, lazy2)
 import Json.Decode as Json
 import Task
+import Time
 
 
-main : Program (Maybe Model) Model Msg
+main : Program () Model Msg
 main =
     Browser.document
         { init = init
         , view = \model -> { title = "Elm • TodoMVC", body = [ view model ] }
         , update = updateWithStorage
-        , subscriptions = \_ -> Sub.none
+        , subscriptions = subscriptions
         }
 
 
-port setStorage : Model -> Cmd msg
+animator : Animator.Animator Model
+animator =
+    Animator.animator
+        |> Animator.Css.watching .entries
+            (\newEntries model ->
+                { model | entries = newEntries }
+            )
+
+
+
+-- port setStorage : Model -> Cmd msg
 
 
 {-| We want to `setStorage` on every update. This function adds the setStorage
@@ -49,7 +60,8 @@ updateWithStorage msg model =
             update msg model
     in
     ( newModel
-    , Cmd.batch [ setStorage newModel, cmds ]
+    , cmds
+      --, Cmd.batch [ setStorage newModel, cmds ]
     )
 
 
@@ -59,11 +71,26 @@ updateWithStorage msg model =
 
 
 type alias Model =
-    { entries : List Entry
+    { entries : Animator.Timeline (List AnimatedEntry)
     , field : String
     , uid : Int
     , visibility : String
     }
+
+
+type alias AnimatedEntry =
+    { entry : Entry, presence : Presence }
+
+
+updateAnimatedEntry : (Entry -> Entry) -> AnimatedEntry -> AnimatedEntry
+updateAnimatedEntry updateFunction animatedEntry =
+    { animatedEntry | entry = updateFunction animatedEntry.entry }
+
+
+type Presence
+    = Added
+    | Present
+    | Deleted
 
 
 type alias Entry =
@@ -76,7 +103,7 @@ type alias Entry =
 
 emptyModel : Model
 emptyModel =
-    { entries = []
+    { entries = Animator.init []
     , visibility = "All"
     , field = ""
     , uid = 0
@@ -92,9 +119,9 @@ newEntry desc id =
     }
 
 
-init : Maybe Model -> ( Model, Cmd Msg )
-init maybeModel =
-    ( Maybe.withDefault emptyModel maybeModel
+init : () -> ( Model, Cmd Msg )
+init _ =
+    ( emptyModel
     , Cmd.none
     )
 
@@ -118,6 +145,7 @@ type Msg
     | Check Int Bool
     | CheckAll Bool
     | ChangeVisibility String
+    | Tick Time.Posix
 
 
 
@@ -139,7 +167,11 @@ update msg model =
                         model.entries
 
                     else
-                        model.entries ++ [ newEntry model.field model.uid ]
+                        let
+                            newEntries =
+                                Animator.current model.entries ++ [ { entry = newEntry model.field model.uid, presence = Added } ]
+                        in
+                        model.entries |> Animator.go Animator.slowly newEntries
               }
             , Cmd.none
             )
@@ -151,67 +183,72 @@ update msg model =
 
         EditingEntry id isEditing ->
             let
-                updateEntry t =
-                    if t.id == id then
-                        { t | editing = isEditing }
+                updateEntry entry =
+                    if entry.id == id then
+                        { entry | editing = isEditing }
 
                     else
-                        t
+                        entry
 
                 focus =
                     Dom.focus ("todo-" ++ String.fromInt id)
             in
-            ( { model | entries = List.map updateEntry model.entries }
+            ( { model | entries = model.entries |> Animator.go Animator.immediately (List.map (updateAnimatedEntry updateEntry) (Animator.current model.entries)) }
             , Task.attempt (\_ -> NoOp) focus
             )
 
         UpdateEntry id task ->
             let
-                updateEntry t =
-                    if t.id == id then
-                        { t | description = task }
+                updateEntry entry =
+                    if entry.id == id then
+                        { entry | description = task }
 
                     else
-                        t
+                        entry
             in
-            ( { model | entries = List.map updateEntry model.entries }
+            ( { model | entries = model.entries |> Animator.go Animator.immediately (List.map (updateAnimatedEntry updateEntry) (Animator.current model.entries)) }
             , Cmd.none
             )
 
         Delete id ->
-            ( { model | entries = List.filter (\t -> t.id /= id) model.entries }
+            ( { model | entries = model.entries |> Animator.go Animator.immediately (List.filter (\t -> t.entry.id /= id) (Animator.current model.entries)) }
             , Cmd.none
             )
 
         DeleteComplete ->
-            ( { model | entries = List.filter (not << .completed) model.entries }
+            ( { model | entries = model.entries |> Animator.go Animator.immediately (List.filter (not << .completed << .entry) (Animator.current model.entries)) }
             , Cmd.none
             )
 
         Check id isCompleted ->
             let
-                updateEntry t =
-                    if t.id == id then
-                        { t | completed = isCompleted }
+                updateEntry entry =
+                    if entry.id == id then
+                        { entry | completed = isCompleted }
 
                     else
-                        t
+                        entry
             in
-            ( { model | entries = List.map updateEntry model.entries }
+            ( { model | entries = model.entries |> Animator.go Animator.immediately (List.map (updateAnimatedEntry updateEntry) (Animator.current model.entries)) }
             , Cmd.none
             )
 
         CheckAll isCompleted ->
             let
-                updateEntry t =
-                    { t | completed = isCompleted }
+                updateEntry entry =
+                    { entry | completed = isCompleted }
             in
-            ( { model | entries = List.map updateEntry model.entries }
+            ( { model | entries = model.entries |> Animator.go Animator.immediately (List.map (updateAnimatedEntry updateEntry) (Animator.current model.entries)) }
             , Cmd.none
             )
 
         ChangeVisibility visibility ->
             ( { model | visibility = visibility }
+            , Cmd.none
+            )
+
+        Tick newTime ->
+            ( Animator.update newTime animator model
             , Cmd.none
             )
 
@@ -230,7 +267,7 @@ view model =
             [ class "todoapp" ]
             [ lazy viewInput model.field
             , lazy2 viewEntries model.visibility model.entries
-            , lazy2 viewControls model.visibility model.entries
+            , lazy2 viewControls model.visibility (List.map .entry (Animator.current model.entries))
             ]
         , infoFooter
         ]
@@ -271,25 +308,25 @@ onEnter msg =
 -- VIEW ALL ENTRIES
 
 
-viewEntries : String -> List Entry -> Html Msg
-viewEntries visibility entries =
+viewEntries : String -> Animator.Timeline (List AnimatedEntry) -> Html Msg
+viewEntries visibility animatedEntries =
     let
         isVisible todo =
             case visibility of
                 "Completed" ->
-                    todo.completed
+                    todo.entry.completed
 
                 "Active" ->
-                    not todo.completed
+                    not todo.entry.completed
 
                 _ ->
                     True
 
         allCompleted =
-            List.all .completed entries
+            List.all (.completed << .entry) (Animator.current animatedEntries)
 
         cssVisibility =
-            if List.isEmpty entries then
+            if List.isEmpty (Animator.current animatedEntries) then
                 "hidden"
 
             else
@@ -311,7 +348,7 @@ viewEntries visibility entries =
             [ for "toggle-all" ]
             [ text "Mark all as complete" ]
         , Keyed.ul [ class "todo-list" ] <|
-            List.map viewKeyedEntry (List.filter isVisible entries)
+            List.map viewKeyedEntry (List.filter isVisible (Animator.current animatedEntries))
         ]
 
 
@@ -319,41 +356,41 @@ viewEntries visibility entries =
 -- VIEW INDIVIDUAL ENTRIES
 
 
-viewKeyedEntry : Entry -> ( String, Html Msg )
+viewKeyedEntry : AnimatedEntry -> ( String, Html Msg )
 viewKeyedEntry todo =
-    ( String.fromInt todo.id, lazy viewEntry todo )
+    ( String.fromInt todo.entry.id, lazy viewEntry todo )
 
 
-viewEntry : Entry -> Html Msg
-viewEntry todo =
+viewEntry : AnimatedEntry -> Html Msg
+viewEntry animatedTodo =
     li
-        [ classList [ ( "completed", todo.completed ), ( "editing", todo.editing ) ] ]
+        [ classList [ ( "completed", animatedTodo.entry.completed ), ( "editing", animatedTodo.entry.editing ) ] ]
         [ div
             [ class "view" ]
             [ input
                 [ class "toggle"
                 , type_ "checkbox"
-                , checked todo.completed
-                , onClick (Check todo.id (not todo.completed))
+                , checked animatedTodo.entry.completed
+                , onClick (Check animatedTodo.entry.id (not animatedTodo.entry.completed))
                 ]
                 []
             , label
-                [ onDoubleClick (EditingEntry todo.id True) ]
-                [ text todo.description ]
+                [ onDoubleClick (EditingEntry animatedTodo.entry.id True) ]
+                [ text animatedTodo.entry.description ]
             , button
                 [ class "destroy"
-                , onClick (Delete todo.id)
+                , onClick (Delete animatedTodo.entry.id)
                 ]
                 []
             ]
         , input
             [ class "edit"
-            , value todo.description
+            , value animatedTodo.entry.description
             , name "title"
-            , id ("todo-" ++ String.fromInt todo.id)
-            , onInput (UpdateEntry todo.id)
-            , onBlur (EditingEntry todo.id False)
-            , onEnter (EditingEntry todo.id False)
+            , id ("todo-" ++ String.fromInt animatedTodo.entry.id)
+            , onInput (UpdateEntry animatedTodo.entry.id)
+            , onBlur (EditingEntry animatedTodo.entry.id False)
+            , onEnter (EditingEntry animatedTodo.entry.id False)
             ]
             []
         ]
@@ -444,3 +481,8 @@ infoFooter =
             , a [ href "http://todomvc.com" ] [ text "TodoMVC" ]
             ]
         ]
+
+
+subscriptions : Model -> Sub Msg
+subscriptions model =
+    animator |> Animator.toSubscription Tick model
