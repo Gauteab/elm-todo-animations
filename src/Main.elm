@@ -215,7 +215,7 @@ update msg model =
             ( { model
                 | entries =
                     model.entries
-                        |> Animator.go Animator.immediately
+                        |> Animator.go Animator.verySlowly
                             (List.updateIf
                                 (\t -> t.entry.id == id)
                                 (\t -> { t | presence = Deleted })
@@ -372,25 +372,33 @@ viewKeyedEntry timeline todo =
 
 
 viewEntry : Animator.Timeline (List AnimatedEntry) -> AnimatedEntry -> Html Msg
-viewEntry timeline ({ entry } as animatedTodo) =
+viewEntry timeline ({ entry, presence } as animatedTodo) =
     Animator.Css.node "li"
         timeline
         [ Animator.Css.height <|
             \entries ->
                 let
-                    presence =
-                        entries |> List.filter ((.id << .entry) >> (==) entry.id) |> List.head |> Maybe.map .presence
+                    timelinePresence =
+                        entries
+                            |> List.find ((.entry >> .id) >> (==) entry.id)
+                            |> Maybe.map .presence
                 in
-                if presence == Just Added then
+                if timelinePresence == Just Added then
                     Animator.at 60
 
-                else if presence == Just Deleted then
-                    Animator.at 5
+                else if timelinePresence == Just Deleted then
+                    Animator.at 0
 
                 else
                     Animator.at 0
         ]
-        [ classList [ ( "completed", animatedTodo.entry.completed ), ( "editing", animatedTodo.entry.editing ) ] ]
+        [ if presence == Deleted then
+            style "border" "none"
+
+          else
+            class ""
+        , classList [ ( "completed", animatedTodo.entry.completed ), ( "editing", animatedTodo.entry.editing ) ]
+        ]
         [ div
             [ class "view" ]
             [ input
