@@ -171,7 +171,7 @@ update msg model =
                             newEntries =
                                 Animator.current model.entries ++ [ { entry = newEntry model.field model.uid, presence = Added } ]
                         in
-                        model.entries |> Animator.go Animator.slowly newEntries
+                        model.entries |> Animator.go Animator.verySlowly newEntries
               }
             , Cmd.none
             )
@@ -348,7 +348,7 @@ viewEntries visibility animatedEntries =
             [ for "toggle-all" ]
             [ text "Mark all as complete" ]
         , Keyed.ul [ class "todo-list" ] <|
-            List.map viewKeyedEntry (List.filter isVisible (Animator.current animatedEntries))
+            List.map (viewKeyedEntry animatedEntries) (List.filter isVisible (Animator.current animatedEntries))
         ]
 
 
@@ -356,14 +356,27 @@ viewEntries visibility animatedEntries =
 -- VIEW INDIVIDUAL ENTRIES
 
 
-viewKeyedEntry : AnimatedEntry -> ( String, Html Msg )
-viewKeyedEntry todo =
-    ( String.fromInt todo.entry.id, lazy viewEntry todo )
+viewKeyedEntry : Animator.Timeline (List AnimatedEntry) -> AnimatedEntry -> ( String, Html Msg )
+viewKeyedEntry timeline todo =
+    ( String.fromInt todo.entry.id, viewEntry timeline todo )
 
 
-viewEntry : AnimatedEntry -> Html Msg
-viewEntry animatedTodo =
-    li
+viewEntry : Animator.Timeline (List AnimatedEntry) -> AnimatedEntry -> Html Msg
+viewEntry timeline ({ entry } as animatedTodo) =
+    Animator.Css.node "li"
+        timeline
+        [ Animator.Css.height <|
+            \entries ->
+                let
+                    presence =
+                        entries |> List.filter ((.id << .entry) >> (==) entry.id) |> List.head |> Maybe.map .presence
+                in
+                if presence == Just Added then
+                    Animator.at 60
+
+                else
+                    Animator.at 0
+        ]
         [ classList [ ( "completed", animatedTodo.entry.completed ), ( "editing", animatedTodo.entry.editing ) ] ]
         [ div
             [ class "view" ]
