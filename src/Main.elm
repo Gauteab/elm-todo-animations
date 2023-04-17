@@ -23,6 +23,7 @@ import Html.Events exposing (..)
 import Html.Keyed as Keyed
 import Html.Lazy exposing (lazy, lazy2)
 import Json.Decode as Json
+import List.Extra as List
 import Task
 import Time
 
@@ -211,7 +212,16 @@ update msg model =
             )
 
         Delete id ->
-            ( { model | entries = model.entries |> Animator.go Animator.immediately (List.filter (\t -> t.entry.id /= id) (Animator.current model.entries)) }
+            ( { model
+                | entries =
+                    model.entries
+                        |> Animator.go Animator.immediately
+                            (List.updateIf
+                                (\t -> t.entry.id == id)
+                                (\t -> { t | presence = Deleted })
+                                (Animator.current model.entries)
+                            )
+              }
             , Cmd.none
             )
 
@@ -373,6 +383,9 @@ viewEntry timeline ({ entry } as animatedTodo) =
                 in
                 if presence == Just Added then
                     Animator.at 60
+
+                else if presence == Just Deleted then
+                    Animator.at 5
 
                 else
                     Animator.at 0
